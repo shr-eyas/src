@@ -128,8 +128,7 @@ void Scheduler::update(const ros::Time& now, const ros::Duration& period) {
     const Eigen::Vector3d x(transform.translation());
     const Eigen::Vector3d xd = J * dq;
 
-    // Eigen::Matrix<double, 7, 1> tau_cmd = Eigen::Matrix<double, 7, 1>::Zero();
-    Eigen::Matrix<double, 7, 1> tau_cmd = C + G;
+    Eigen::Matrix<double, 7, 1> tau_cmd = C;
     running_ = false;
 
     if(schedule) {
@@ -185,7 +184,7 @@ void Scheduler::update(const ros::Time& now, const ros::Duration& period) {
             }
 
             // full dynamics torque
-            tau_cmd = M * qdd + C + G;
+            tau_cmd = M * qdd + C;
             running_ = true;
 
             // torque-rate limit and command
@@ -276,7 +275,7 @@ void Scheduler::goalCallBack() {
     schedule->T             = T;
     schedule->alpha         = goal->alpha_kb;
     schedule->use_nullspace = goal->use_nullspace;
-    schedule->inertia       = Eigen::Map<const Eigen::Matrix<double,3,3,Eigen::RowMajor>>(goal->H.data());
+    schedule->inertia       = Eigen::Map<const Eigen::Matrix<double,3,3>>(goal->H.data());
     schedule->q_home        = Eigen::Map<const Eigen::Matrix<double,7,1>>(goal->q_home.data());
 
     schedule->x.resize(T);
@@ -289,8 +288,8 @@ void Scheduler::goalCallBack() {
         schedule->x[k]   = Eigen::Map<const Eigen::Matrix<double,3,1>>(&goal->x_seq[3*k]);
         schedule->xd[k] = Eigen::Map<const Eigen::Matrix<double,3,1>>(&goal->xd_seq[3*k]);
         schedule->xdd[k]  = Eigen::Map<const Eigen::Matrix<double,3,1>>(&goal->xdd_seq[3*k]);
-        schedule->stiffness[k]    = Eigen::Map<const Eigen::Matrix<double,3,3,Eigen::RowMajor>>(&goal->K_seq[9*k]);
-        schedule->damping[k]    = Eigen::Map<const Eigen::Matrix<double,3,3,Eigen::RowMajor>>(&goal->D_seq[9*k]);
+        schedule->stiffness[k]  = Eigen::Map<const Eigen::Matrix<double,3,3>>(&goal->K_seq[9*k]);
+        schedule->damping[k]    = Eigen::Map<const Eigen::Matrix<double,3,3>>(&goal->D_seq[9*k]);
     }
 
     // start slightly in the future for clean k=0 alignment

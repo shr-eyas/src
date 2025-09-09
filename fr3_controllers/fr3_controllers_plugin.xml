@@ -61,4 +61,10 @@
     </description>
   </class>
 
+  <class name="fr3_controllers/Scheduler"
+        type="fr3_controllers::Scheduler"
+        base_class_type="controller_interface::ControllerBase">
+    <description>Time-scheduled Cartesian impedance executor.</description>
+  </class>
+
 </library>
