@@ -1,0 +1,26 @@
+# Goal
+float64 dt
+uint32  T
+bool    use_nullspace
+float64 alpha_kb
+float64[9]  H
+float64[7]  q_home
+float64[]   x_seq
+float64[]   xd_seq
+float64[]   xdd_seq
+float64[]   K_seq
+float64[]   D_seq
+---
+# Result 
+bool      success
+string    reason
+uint32    T_exec
+float32[] x_meas_seq    # len = 3*T_exec
+float32[] xd_meas_seq   # len = 3*T_exec
+float32[] tau_seq       # len = 7*T_exec
+float32[] q_meas_seq    # len = 7*T_exec
+float32[] dq_meas_seq   # len = 7*T_exec
+float64   t0_sec
+---
+# Feedback
+uint32 k
