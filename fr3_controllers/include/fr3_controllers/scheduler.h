@@ -1,3 +1,13 @@
+"""
+Operational Space Impedance Controller with Trajectory Scheduling for the Franka Research 3
+
+Copyright (C) 2025 Shreyas Kumar, HiRo Lab, Indian Institute of Science.
+Email: shreyaskumar@iisc.ac.in
+
+This module is licensed under the MIT License.
+For more information, visit: https://opensource.org/licenses/MIT
+"""
+
 #pragma once
 
 #include <array>
