@@ -44,46 +44,50 @@ public:
   void update(const ros::Time&, const ros::Duration& period) override;
 
 private:
-    std::unique_ptr<franka_hw::FrankaStateHandle> state_handle_;
-    std::unique_ptr<franka_hw::FrankaModelHandle> model_handle_;
-    std::vector<hardware_interface::JointHandle> joint_handles_;
+  std::unique_ptr<franka_hw::FrankaStateHandle> state_handle_;
+  std::unique_ptr<franka_hw::FrankaModelHandle> model_handle_;
+  std::vector<hardware_interface::JointHandle> joint_handles_;
 
-    // Action server (non-RT thread)
-    std::unique_ptr<actionlib::SimpleActionServer<fr3_controllers::ExecuteScheduleAction>> as_;
-    void goalCallBack();     // accept and load new schedule
-    void preemptCallBack();  // cancel current schedule
+  // Action server (non-RT thread)
+  std::unique_ptr<actionlib::SimpleActionServer<fr3_controllers::ExecuteScheduleAction>> as_;
+  void goalCallBack();     // accept and load new schedule
+  void preemptCallBack();  // cancel current schedule
 
-    // Communicate data between RT and non-RT threads.
-    realtime_tools::RealtimeBuffer<std::shared_ptr<const PreparedSchedule>> sched_buf_;
+  // Communicate data between RT and non-RT threads.
+  realtime_tools::RealtimeBuffer<std::shared_ptr<const PreparedSchedule>> sched_buf_;
 
-    // Rollout logs (pre-allocated per goal)
-    std::vector<float> x_meas_log_;   // 3*T
-    std::vector<float> xd_meas_log_;  // 3*T
-    std::vector<float> tau_log_;      // 7*T
-    std::vector<float> q_meas_log_;   // 7*T  
-    std::vector<float> dq_meas_log_;  // 7*T  
-    double t0_sec_{0.0};           
+  // Rollout logs (pre-allocated per goal)
+  std::vector<float> x_meas_log_;   // 3*T
+  std::vector<float> xd_meas_log_;  // 3*T
+  std::vector<float> tau_log_;      // 7*T
+  std::vector<float> q_meas_log_;   // 7*T  
+  std::vector<float> dq_meas_log_;  // 7*T  
+  double t0_sec_{0.0};           
 
-    // Low-rate feedback timer (non-RT)
-    ros::Timer fb_timer_;
-    void feedbackCallBack(const ros::TimerEvent&);
+  // Low-rate feedback timer (non-RT)
+  ros::Timer fb_timer_;
+  void feedbackCallBack(const ros::TimerEvent&);
 
-    // RT state (only touched in update())
-    Eigen::Matrix<double,3,7> previous_jacobian_{Eigen::Matrix<double,3,7>::Zero()};    // for Jdot*qdot FD
-    Eigen::Matrix<double,7,1> previous_tau_{Eigen::Matrix<double,7,1>::Zero()};         // for torque-rate limit
-    double delta_tau_max_{1.0};                                                         // Nm per cycle
-    bool running_{false};
-    uint32_t time_index_{0};
-    double kp_ns_{15.0};
-    double kd_ns_{3.0};
+  // RT state (only touched in update())
+  Eigen::Matrix<double,3,7> previous_jacobian_{Eigen::Matrix<double,3,7>::Zero()};    // for Jdot*qdot FD
+  Eigen::Matrix<double,7,1> previous_tau_{Eigen::Matrix<double,7,1>::Zero()};         // for torque-rate limit
+  double delta_tau_max_{1.0};                                                         // Nm per cycle
+  bool running_{false};
+  uint32_t time_index_{0};
+  double kp_ns_{15.0};
+  double kd_ns_{3.0};
 
-    // RT helpers
-    inline Eigen::Matrix<double,7,1> saturateTorqueRate(
-        const Eigen::Matrix<double,7,1>& tau_des,
-        const Eigen::Matrix<double,7,1>& tau_last) const;
+  Eigen::Matrix<double, 7, 1> dq_filtered_;
+  Eigen::Matrix<double, 7, 1> q_d;    // desired joint position
+  Eigen::Matrix<double, 7, 1> dq_d;   // desired joint velocity
 
-    inline bool spd_floor(Eigen::Matrix3d& M, double eps) const;                        // clamp to SPD with floor
-    inline uint32_t timeIndex(const ros::Time& now, const PreparedSchedule& S) const;   // t→k
+  // RT helpers
+  inline Eigen::Matrix<double,7,1> saturateTorqueRate(
+      const Eigen::Matrix<double,7,1>& tau_des,
+      const Eigen::Matrix<double,7,1>& tau_last) const;
+
+  inline bool spd_floor(Eigen::Matrix3d& M, double eps) const;                        // clamp to SPD with floor
+  inline uint32_t timeIndex(const ros::Time& now, const PreparedSchedule& S) const;   // t→k
 };
 
 } // namespace fr3_controllers

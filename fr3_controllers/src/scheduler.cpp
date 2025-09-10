@@ -94,6 +94,9 @@ bool Scheduler::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& nod
 }
 
 void Scheduler::starting(const ros::Time& /*time*/) {
+    const franka::RobotState robot_state = state_handle_->getRobotState();
+    q_d = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.q.data());
+    dq_d = Eigen::Matrix<double, 7, 1>::Zero();
     previous_jacobian_.setZero();
     previous_tau_.setZero();
     running_ = false;
@@ -101,7 +104,6 @@ void Scheduler::starting(const ros::Time& /*time*/) {
 }
 
 void Scheduler::update(const ros::Time& now, const ros::Duration& period) {
-
     // Current schedule pointer (nullptr means idle)
     auto schedule_ptr = sched_buf_.readFromRT();
     const PreparedSchedule* schedule = schedule_ptr ? schedule_ptr->get() : nullptr;
@@ -128,7 +130,20 @@ void Scheduler::update(const ros::Time& now, const ros::Duration& period) {
     const Eigen::Vector3d x(transform.translation());
     const Eigen::Vector3d xd = J * dq;
 
-    Eigen::Matrix<double, 7, 1> tau_cmd = C;
+    // double alpha = 0.99;
+    // for (size_t i = 0; i < 7; i++) {
+    //     dq_filtered_[i] = (1 - alpha) * dq_filtered_[i] + alpha * robot_state.dq[i];
+    // }
+
+    // Eigen::Matrix<double,7,7> K, D;
+    // K.setZero(); 
+    // D.setZero();
+    // K(0,0)=600; K(1,1)=600; K(2,2)=600; K(3,3)=600; K(4,4)=250; K(5,5)=150; K(6,6)=50;
+    // D(0,0)=50;  D(1,1)=50;  D(2,2)=50;  D(3,3)=20;  D(4,4)=20;  D(5,5)=20;  D(6,6)=10;
+  
+    // Eigen::Matrix<double, 7, 1> tau_cmd = C + K*(q_d - q) + D*(dq_d - dq_filtered_); 
+
+    Eigen::Matrix<double, 7, 1> tau_cmd = C; 
     running_ = false;
 
     if(schedule) {
@@ -204,7 +219,7 @@ void Scheduler::update(const ros::Time& now, const ros::Duration& period) {
                 q_meas_log_[7*k + j]  = static_cast<float>(q(j));
                 dq_meas_log_[7*k + j] = static_cast<float>(dq(j));
             }
-            return;    
+            return;
         }
     }
 
@@ -216,31 +231,31 @@ void Scheduler::update(const ros::Time& now, const ros::Duration& period) {
 
 Eigen::Matrix<double,7,1> Scheduler::saturateTorqueRate(const Eigen::Matrix<double,7,1>& tau_des,
                                                         const Eigen::Matrix<double,7,1>& tau_last) const {
-  Eigen::Matrix<double,7,1> out;
-  for (int i = 0; i < 7; ++i) {
-    const double d = tau_des(i) - tau_last(i);
-    const double s = std::max(std::min(d, delta_tau_max_), -delta_tau_max_);
-    out(i) = tau_last(i) + s;
-  }
-  return out;
+    Eigen::Matrix<double,7,1> out;
+    for (int i = 0; i < 7; ++i) {
+        const double d = tau_des(i) - tau_last(i);
+        const double s = std::max(std::min(d, delta_tau_max_), -delta_tau_max_);
+        out(i) = tau_last(i) + s;
+    }
+    return out;
 }
 
 bool Scheduler::spd_floor(Eigen::Matrix3d& mat, double eps) const {
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(mat);
-  if (es.info() != Eigen::Success) { mat = eps * Eigen::Matrix3d::Identity(); return false; }
-  Eigen::Vector3d eigvals = es.eigenvalues().cwiseMax(eps);
-  Eigen::Matrix3d eigvecs = es.eigenvectors();
-  mat = eigvecs * eigvals.asDiagonal() * eigvecs.transpose();
-  return true;
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(mat);
+    if (es.info() != Eigen::Success) { mat = eps * Eigen::Matrix3d::Identity(); return false; }
+    Eigen::Vector3d eigvals = es.eigenvalues().cwiseMax(eps);
+    Eigen::Matrix3d eigvecs = es.eigenvectors();
+    mat = eigvecs * eigvals.asDiagonal() * eigvecs.transpose();
+    return true;
 }
 
 uint32_t Scheduler::timeIndex(const ros::Time& now, const PreparedSchedule& schedule) const {
-  if (now < schedule.t0) return 0;
-  const double elapsed_s = (now - schedule.t0).toSec();
-  const double kf = std::round(elapsed_s / schedule.dt);
-  if (kf < 0.0) return 0;
-  if (kf >= static_cast<double>(schedule.T)) return schedule.T;
-  return static_cast<uint32_t>(kf);
+    if (now < schedule.t0) return 0;
+    const double elapsed_s = (now - schedule.t0).toSec();
+    const double kf = std::round(elapsed_s / schedule.dt);
+    if (kf < 0.0) return 0;
+    if (kf >= static_cast<double>(schedule.T)) return schedule.T;
+    return static_cast<uint32_t>(kf);
 }
 
 void Scheduler::goalCallBack() {
@@ -312,26 +327,26 @@ void Scheduler::goalCallBack() {
 }
 
 void Scheduler::preemptCallBack() {
-  auto sp = sched_buf_.readFromNonRT();
-  const PreparedSchedule* S = (sp && sp->get()) ? sp->get() : nullptr;
-  sched_buf_.writeFromNonRT(std::shared_ptr<const PreparedSchedule>());
+    auto sp = sched_buf_.readFromNonRT();
+    const PreparedSchedule* S = (sp && sp->get()) ? sp->get() : nullptr;
+    sched_buf_.writeFromNonRT(std::shared_ptr<const PreparedSchedule>());
 
-  fr3_controllers::ExecuteScheduleResult res;
-  res.success = true;
-  res.reason  = "preempted";
-  res.T_exec  = time_index_;
-  // return whatever logged so far (if any schedule existed)
-  if (S) {
-    const uint32_t T = S->T;
-    const uint32_t N = std::min<uint32_t>(time_index_, T);
-    res.x_meas_seq.assign(x_meas_log_.begin(), x_meas_log_.begin() + 3*N);
-    res.xd_meas_seq.assign(xd_meas_log_.begin(), xd_meas_log_.begin() + 3*N);
-    res.tau_seq.assign(tau_log_.begin(), tau_log_.begin() + 7*N);
-    res.q_meas_seq.assign(q_meas_log_.begin(),  q_meas_log_.begin()  + 7*N);
-    res.dq_meas_seq.assign(dq_meas_log_.begin(), dq_meas_log_.begin() + 7*N);
-    res.t0_sec = t0_sec_;
-  }
-  as_->setPreempted(res);
+    fr3_controllers::ExecuteScheduleResult res;
+    res.success = true;
+    res.reason  = "preempted";
+    res.T_exec  = time_index_;
+    // return whatever logged so far (if any schedule existed)
+    if (S) {
+        const uint32_t T = S->T;
+        const uint32_t N = std::min<uint32_t>(time_index_, T);
+        res.x_meas_seq.assign(x_meas_log_.begin(), x_meas_log_.begin() + 3*N);
+        res.xd_meas_seq.assign(xd_meas_log_.begin(), xd_meas_log_.begin() + 3*N);
+        res.tau_seq.assign(tau_log_.begin(), tau_log_.begin() + 7*N);
+        res.q_meas_seq.assign(q_meas_log_.begin(),  q_meas_log_.begin()  + 7*N);
+        res.dq_meas_seq.assign(dq_meas_log_.begin(), dq_meas_log_.begin() + 7*N);
+        res.t0_sec = t0_sec_;
+    }
+    as_->setPreempted(res);
 }
 
 void Scheduler::feedbackCallBack(const ros::TimerEvent&) {
