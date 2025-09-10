@@ -13,6 +13,8 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package()
 
 catkin_install_python(PROGRAMS
-  scripts/test_constant_schedule.py
+  scripts/unit_tests/test_constant_schedule.py
+  scripts/unit_tests/test_trajectory.py
+  scripts/unit_tests/test_trajectory_with_gripper.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
