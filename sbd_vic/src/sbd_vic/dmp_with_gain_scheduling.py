@@ -1,122 +1,130 @@
 import numpy as np
+from sbd_vic.utils import sym, finite_diff, lt_pack, lt_unpack
 from sbd_vic.function_approximator_rbfn import FunctionApproximatorRBFN
-from sbd_vic.dynamical_systems import DynamicalSystems
 from sbd_vic.trajectory_generator import MinimumJerk
-from sbd_vic.utils import sym, lt_pack
+from sbd_vic.dynamical_systems import DynamicalSystems
 
 class DMPWithGainScheduling:
-    def __init__(
-            self, 
-            start, 
-            end, 
-            tau, 
-            dt,
-            n_bfs_traj=21, 
-            n_bfs_slack=7,
-            normalize_rbfs_traj=True, 
-            normalize_rbfs_slack=True,
-            alpha_kb=0.5,
-            K0=100.0, 
-            D0=20.0,
-            slack_mag=20.0, 
-            slack_rate_limit=200.0
+    """
+    DMP with gain scheduling via RBFs for trajectory and gain modulation.
+    """
+    def __init__(self, start, end, tau, dt, n_bfs_traj, n_bfs_slack, K0, D0, alpha, H, 
+                normalize_rbfs_traj=True, normalize_rbfs_slack=True, 
+                slack_mag=20.0, slack_rate_limit=200.0
         ):
-        
+        """
+        @param start                    (np.ndarray)
+            Start position vector. 
+        @param end                      (np.ndarray)
+            End position vector.
+        @param tau                      (float)
+            Duration of the trajectory.
+        @param dt                       (float)   
+            Time step for discretization.
+        @param n_bfs_traj               (int)
+            Number of RBFs for trajectory generation.
+        @param n_bfs_slack              (int)    
+            Number of RBFs for gain scheduling.
+        @param K0                       (float)   
+            Nominal stiffness gain.
+        @param D0                       (float)
+            Nominal damping gain.
+        @param alpha                    (float)
+            Gain scheduling scaling factor.
+        @param H                        (np.ndarray)
+            Desired stiffness matrix for the task.
+        @param normalize_rbfs_traj      (bool)
+            Whether to normalize trajectory RBF outputs.
+        @param normalize_rbfs_slack     (bool)
+            Whether to normalize gain scheduling RBF outputs.
+        @param slack_mag                (float)    
+            Maximum magnitude for slack variables.
+        @param slack_rate_limit         (float) 
+            Maximum rate of change for slack variables.
+        """
         self.start      = np.asarray(start, float).reshape(3)
         self.end        = np.asarray(end, float).reshape(3)
         self.tau        = float(tau)
         self.dt         = float(dt)
         self.ts         = np.arange(0.0, self.tau+1e-12, self.dt)
         self.T          = self.ts.size
-        self.alpha_kb   = float(alpha_kb)
+        self.alpha      = float(alpha)
+        self.H          = np.asarray(H, float).reshape(3, 3)
         self.K0         = float(K0)
         self.D0         = float(D0)
         self.slack_mag  = float(slack_mag)
         self.slack_rate = float(slack_rate_limit)
         self.ds         = DynamicalSystems(self.tau)
-
-        # trajectory forcing
-        self.rbf_traj   = [FunctionApproximatorRBFN(n_bfs_traj, normalize=normalize_rbfs_traj) for _ in range(3)]
+        
         y, yd, ydd, ts  = MinimumJerk(self.start, self.end, self.tau, self.dt).generate()
-        x               = self.ds.time_system(ts)
+        phase           = self.ds.time_system(ts)
         goal            = self.ds.polynomial_system(ts, self.start, self.end, 3)
 
         d, m = 20.0, 1.0
         k    = (d**2) / 4.0
-
+        
+        """
+        Initialize trajectory RBFs by computing target forcing term
+        """
+        self.rbf_traj   = [FunctionApproximatorRBFN(n_bfs_traj, normalize=normalize_rbfs_traj) for _ in range(3)]
         spring      = k * (y - goal)
         damper      = d * self.tau * yd
         f_target    = (self.tau**2) * ydd + (spring + damper) / m
-        f_target    = f_target / (x[:,None] + 1e-12)
-        
+        f_target    = f_target / (phase[:,None] + 1e-12)
         for i in range(3): 
-            self.rbf_traj[i].train(x, f_target[:,i])
+            self.rbf_traj[i].train(phase, f_target[:,i])
 
-        # slacks
-        self.rbf_Sd = FunctionApproximatorRBFN(n_bfs_slack, normalize=normalize_rbfs_slack)
-        self.rbf_Sk = FunctionApproximatorRBFN(n_bfs_slack, normalize=normalize_rbfs_slack)
-        self.Hd     = None
-        self._init_slacks(np.eye(3))
-
-    def get_forcing(self, x):
+        """
+        Initialize slacks for constant gains pre-sampling 
+        """
+        self.rbf_SD = FunctionApproximatorRBFN(n_bfs_slack, normalize=normalize_rbfs_slack)
+        self.rbf_SK = FunctionApproximatorRBFN(n_bfs_slack, normalize=normalize_rbfs_slack)
+        I = np.eye(3)
+        H = np.asarray(H, float).reshape(3, 3)
+        # We want to find SK0 such that SK0^2 = 2*alpha*K0*I or SK0 = sqrt(2*alpha*K0)*I
+        SK0 = np.sqrt(max(0.0, 2*alpha*K0)) * I
+        # We want to find SD0 such that SD0^2 = D0*I - alpha*H or SD0 = sqrt(D0*I - alpha*H)
+        # Perform eigen-decomposition to calculate square root of SD0
+        w, V = np.linalg.eigh(sym(D0 * I - alpha*H))
+        w = np.clip(w, 0, None)
+        SD0 = (V * np.sqrt(w)) @ V.T
+        SK = np.tile(lt_pack(SK0)[None,:], (ts.size,1))
+        SD = np.tile(lt_pack(SD0)[None,:], (ts.size,1))
+        self.rbf_SK.train(phase, SK)
+        self.rbf_SD.train(phase, SD)
+        
+    def initial_weights(self):
         """
         @brief
-            Get the forcing term f(x) from the trajectory RBFs at a particular phase x.
-        
-        @param x (float)
-            Phase variable value.
-        
-        @return (np.ndarray)
-            Forcing term vector f(x), shape (3,).
+            Concatenate the weight matrices into a single vector for optimization.
         """
-        xx = np.array([x])
-        return np.array([self.rbf_traj[i].predict(xx)[0,0] for i in range(3)])
-
-    def _init_slacks(self, H):
+        theta = np.concatenate([r.W.ravel() for r in self.rbf_traj] + [self.rbf_SD.W.ravel(), self.rbf_SK.W.ravel()])
+        n_forcing_weights   = sum(r.W.size for r in self.rbf_traj)
+        n_damping_weights   = self.rbf_SD.W.size
+        n_stiffness_weights = self.rbf_SK.W.size
+        return theta, n_forcing_weights, n_damping_weights, n_stiffness_weights
+    
+    def set_theta(self, theta, sizes):
         """
         @brief
-            Initialize the slack RBFs to match initial desired gains.
-            Find S_D, S_K such that:
-                S_K^2 = 2 * alpha * K0 
-                S_D^2 = D0 - alpha * H 
+            Slice the flat theta back into the weight matrices in the same order as initial_weights().
 
-        @param H (np.ndarray)
-            Desired inertia matrix (3x3).
+        @param theta (np.ndarray)
+            Flat weight vector.
+        @param sizes (Tuple[int, int, int])
+            Sizes of the weight matrices: (n_forcing_weights, n_damping_weights, n_stiffness_weights).
         """
-        a   = self.alpha_kb
-        I   = np.eye(3)
-        H  = np.asarray(H, float).reshape(3,3)
-        # choose S such that D(0)≈D0 I and K(0)=K0 I
-        DeltaD0 = sym(self.D0*I - a*H)
-        w,V     = np.linalg.eigh(DeltaD0)
-        w       = np.clip(w,0.0,None)
-        SD0     = (V*np.sqrt(w))@V.T
-        SK0     = np.sqrt(max(0.0, 2.0*a*self.K0)) * I
-        x       = self.ds.time_system(self.ts)
-        Sd_demo = np.tile(lt_pack(SD0)[None,:], (self.T, 1))
-        Sk_demo = np.tile(lt_pack(SK0)[None,:], (self.T, 1))
-        self.rbf_Sd.train(x, Sd_demo); self.rbf_Sk.train(x, Sk_demo)
-
-    def set_Hd(self,Hd):
-        self.Hd = np.asarray(Hd,float).reshape(3,3)
-        self._init_slacks(self.Hd)
-
-    def theta0(self):
-        nf      = sum([r.W.size for r in self.rbf_traj])
-        ngd     = self.rbf_Sd.W.size
-        ngk     = self.rbf_Sk.W.size
-        theta   = np.concatenate([r.W.ravel() for r in self.rbf_traj] + [self.rbf_Sd.W.ravel(), self.rbf_Sk.W.ravel()])
-        return theta, nf, ngd, ngk
-
-    def set_theta(self,theta,sizes):
-        nf, ngd, ngk = sizes
-        off=0
+        _, n_damping_weights, n_stiffness_weights = sizes
+        off = 0
         for r in self.rbf_traj:
-            n=r.W.size; r.W=theta[off:off+n].reshape(r.W.shape); off+=n
-        self.rbf_Sd.W=theta[off:off+ngd].reshape(self.rbf_Sd.W.shape); off+=ngd
-        self.rbf_Sk.W=theta[off:off+ngk].reshape(self.rbf_Sk.W.shape); off+=ngk
+            n   = r.W.size
+            r.W = theta[off:off + n].reshape(r.W.shape)
+            off += n
+        self.rbf_SD.W   = theta[off:off + n_damping_weights].reshape(self.rbf_SD.W.shape)
+        off             +=n_damping_weights
+        self.rbf_SK.W   = theta[off:off + n_stiffness_weights].reshape(self.rbf_SK.W.shape)
 
-    def rollout_traj(self):
+    def rollout_traj(self, sample_unsafe: bool = False):
         ts   = self.ts
         T    = self.T
         y    = np.zeros((T,3))
@@ -124,47 +132,99 @@ class DMPWithGainScheduling:
         ydd  = np.zeros((T,3))
         y[0] = self.start
 
-        def acc(t, y_, yd_):
+        def dmp(t, y, yd):
+            """
+            DMP acceleration    ydd = (gate * forcing term - (k/m * (y - goal) + d/m * tau * yd)) / (tau^2)
+                                where:
+                                    gate goes from 1 to 0 as time goes from 0 to tau
+                                    forcing term comes from RBF predictions
+            We integrate ydd to get yd and yd to get y using RK4.
+            """
             phase   = self.ds.time_system(np.array([t]))[0]
-            gate    = self.ds.time_system(np.array([t]))[0]
-            yg      = self.ds.polynomial_system(np.array([t]), self.start, self.end, 3)[0]
-            fhat    = self._f_of_phase(phase)
+            gate    = phase
+            goal    = self.ds.polynomial_system(np.array([t]), self.start, self.end, 3)[0]
+            fhat    = np.array([self.rbf_traj[i].predict(phase)[0,0] for i in range(3)]) 
             d, m    = 20.0, 1.0
             k       = (d**2)/4.0
-            spring  = k * (y_ - yg)
-            damper  = d * self.tau * yd_
+            spring  = k * (y - goal)
+            damper  = d * self.tau * yd
             return ((fhat * gate) - (spring + damper) / m) / (self.tau**2)
         
         for k in range(T-1):
             t0 = ts[k]
-            h  = ts[k+1]-ts[k]
-            k1y = yd[k];             k1v=acc(t0,       y[k],           yd[k])
-            k2y = yd[k]+0.5*h*k1v;   k2v=acc(t0+0.5*h, y[k]+0.5*h*k1y, yd[k]+0.5*h*k1v)
-            k3y = yd[k]+0.5*h*k2v;   k3v=acc(t0+0.5*h, y[k]+0.5*h*k2y, yd[k]+0.5*h*k2v)
-            k4y = yd[k]+h*k3v;       k4v=acc(t0+h,     y[k]+h*k3y,     yd[k]+h*k3v)
-            y[k+1]  =y[k]+(h/6.0)*(k1y+2*k2y+2*k3y+k4y)
-            yd[k+1] =yd[k]+(h/6.0)*(k1v+2*k2v+2*k3v+k4v)
-            ydd[k]  =k1v
+            h  = ts[k+1] - ts[k]
 
-        ydd[-1] = acc(ts[-1],y[-1],yd[-1])
-        x   = self.ds.time_system(ts)
-        Sd_vecs = self.rbf_Sd.predict(x)
-        Sk_vecs = self.rbf_Sk.predict(x)
-        # magnitude + slew limits (keep PSD design intact)
-        maxmag  = self.slack_mag
-        rate    = self.slack_rate
-        Sd_vecs = np.clip(Sd_vecs, -maxmag, maxmag)
-        Sk_vecs = np.clip(Sk_vecs, -maxmag, maxmag)
+            k1y = yd[k]
+            k1v = dmp(t0, y[k], yd[k])
 
-        def slew_limit(V, max_rate):
-            V = V.copy()
-            for t in range(1,V.shape[0]):
-                dv   = V[t]-V[t-1]
-                dv   = np.clip(dv, -max_rate*self.dt, max_rate*self.dt)
-                V[t] = V[t-1]+dv
-            return V
+            k2y = yd[k] + 0.5 * h * k1v
+            k2v = dmp(t0 + 0.5 * h, y[k] + 0.5 * h * k1y, yd[k] + 0.5 * h * k1v)
+
+            k3y = yd[k] + 0.5 * h * k2v
+            k3v = dmp(t0 + 0.5 * h, y[k] + 0.5 * h * k2y, yd[k] + 0.5 * h * k2v)
+
+            k4y = yd[k] + 1.0 * h * k3v
+            k4v = dmp(t0 + 1.0 * h, y[k] + 1.0 * h * k3y, yd[k] + 1.0 * h * k3v)
+
+            y[k+1]  = y[k]  + (h/6.0)*(k1y + 2 * k2y + 2 * k3y + k4y)
+            yd[k+1] = yd[k] + (h/6.0)*(k1v + 2 * k2v + 2 * k3v + k4v)
+            ydd[k]  = k1v
+
+        ydd[-1] = dmp(ts[-1], y[-1], yd[-1])
+
+        x       = self.ds.time_system(ts)
+        SD_vecs = self.rbf_SD.predict(x)
+        SK_vecs = self.rbf_SK.predict(x)
+
+        # Enforce slack constraints
+        SD_vecs = np.clip(SD_vecs, -self.slack_mag, self.slack_mag)
+        SK_vecs = np.clip(SK_vecs, -self.slack_mag, self.slack_mag)
+
+        # Enforce rate limit
+        for V in (SD_vecs, SK_vecs):
+            for t in range(1, T):
+                dv    = V[t] - V[t-1]
+                limit = self.slack_rate * self.dt
+                V[t]  = V[t-1] + np.clip(dv, -limit, limit)
+
+        # Build K and D from slacks
+        SD = np.array([lt_unpack(v) for v in SD_vecs])
+        SK = np.array([lt_unpack(v) for v in SK_vecs])
+        """
+        D is recovered using D = alpha * H + SD @ SD^T
+        """
+        H  = self.H
+        D  = np.array([sym(self.alpha * H + SD[k]@SD[k].T) for k in range(T)])
+
+        """
+        D' is computed using:
+            D' = SD' @ SD^T + SD @ SD'^T
+            where SD' is computed using finite difference  
+        """
+        SDot = finite_diff(SD, self.dt)
+        Ddot = np.array([SDot[k]@SD[k].T + SD[k]@SDot[k].T for k in range(T)])
+
+        """
+        K is computed by integrating the following differential equation:
+            Z' = exp(-2 * alpha * t) * B
+    
+        Integrate using Trapezoidal rule
+            Z[0] = I
+            Z[k+1] = Z[k] + h/2 * (E[k]*B[k] + E[k+1]*B[k+1])
+                B[k] = -alpha * Ddot[k] - SK[k]@SK[k].T
+                E[k] = exp(-2 * alpha * t[k])
+
+        Recover stiffness
+            K = Z / exp(-2 * alpha * t)
+        """
+        B    = np.array([-self.alpha * Ddot[k] - SK[k]@SK[k].T for k in range(T)])
+        B    = np.array([sym(B[k]) for k in range(T)])
+        E    = np.exp(-2 * self.alpha * ts)
+        Z    = np.zeros((T,3,3))
+        Z[0] = np.eye(3) * self.K0
+        for k in range(T-1):
+            h      = ts[k+1] - ts[k]
+            Z[k+1] = Z[k] + 0.5 * (E[k] * B[k] + E[k+1] * B[k+1]) * h
+        K = np.array([sym(Z[k]/max(E[k],1e-12)) for k in range(T)])
         
-        Sd_vecs = slew_limit(Sd_vecs, rate)
-        Sk_vecs = slew_limit(Sk_vecs, rate)
-
-        return {"ts":ts, "y_des":y, "yd_des":yd, "ydd_des":ydd, "Sd_vecs":Sd_vecs, "Sk_vecs":Sk_vecs}
+        return {"ts":ts, "y_des":y, "yd_des":yd, "ydd_des":ydd, "SD":SD_vecs, "K":K, "SK":SK_vecs, "D":D, "Ddot":Ddot}
