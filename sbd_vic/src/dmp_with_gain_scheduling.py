@@ -1,8 +1,8 @@
 import numpy as np
-from sbd_vic.utils import sym, finite_diff, lt_pack, lt_unpack
-from sbd_vic.function_approximator_rbfn import FunctionApproximatorRBFN
-from sbd_vic.trajectory_generator import MinimumJerk
-from sbd_vic.dynamical_systems import DynamicalSystems
+from utils import sym, finite_diff, lt_pack, lt_unpack
+from function_approximator_rbfn import FunctionApproximatorRBFN
+from trajectory_generator import MinimumJerk
+from dynamical_systems import DynamicalSystems
 
 class DMPWithGainScheduling:
     """
