@@ -19,14 +19,12 @@ if sys.platform == "darwin":
     mpl.use("Agg")
 import matplotlib.pyplot as plt
 
-
-import numpy as np
-import rospy
-import actionlib
-from typing import Tuple
-from fr3_controllers.msg import ExecuteScheduleAction, ExecuteScheduleGoal
-from franka_msgs.msg import FrankaState
-
+# import numpy as np
+# import rospy # type: ignore
+# import actionlib # type: ignore
+# from typing import Tuple
+# from fr3_controllers.msg import ExecuteScheduleAction, ExecuteScheduleGoal
+# from franka_msgs.msg import FrankaState # type: ignore
 
 """
 Helper functions
@@ -117,7 +115,6 @@ def lt_unpack(v: np.ndarray) -> np.ndarray:
     L[2, 0], L[2, 1], L[2, 2] = v[3], v[4], v[5]
     return L
 
-
 class MinimumJerk:
     """
     Generate minimum-jerk trajectory from start to goal in time tau with dt step.
@@ -187,13 +184,15 @@ class DynamicalSystems:
             A dynamical system with linear decay.
             Dynamics:               x'   = -1 / tau
             Analytical solution:    x(t) = 1 - (t / tau)
+
         @param ts (np.ndarray)
             Time stamps.
+
         @return (np.ndarray)
             Phase variable values at the given time stamps.
         """
         ts = np.asarray(ts, float)
-        return (1.0 - ts / self.tau)
+        return np.clip(1.0 - ts/self.tau, 0.0, 1.0) 
     
     def sigmoid_system(self, ts):
         """
@@ -201,8 +200,10 @@ class DynamicalSystems:
             A dynamical system with sigmoid decay.
             Dynamics:               x'   = r * x * (1 - x / K)
             Analytical solution:    x(t) = K / (1 + D0 * exp(-r * t))
+
         @param ts (np.ndarray)
             Time stamps.
+
         @return (np.ndarray)
             Phase variable values at the given time stamps.
         """
@@ -215,6 +216,7 @@ class DynamicalSystems:
             A dynamical system with exponential decay.
             Dynamics:               x'   = -(alpha / tau) * (x - goal)
             Analytical solution:    x(t) = goal + (start - goal) * exp(-(alpha / tau) * t)
+
         @param ts (np.ndarray)
             Time stamps.
         @param start (np.ndarray)
@@ -223,45 +225,142 @@ class DynamicalSystems:
             Final position vector.
         @param alpha (float)
             Decay rate.
+
         @return (np.ndarray)
             Phase variable values at the given time stamps.
         """
         ts      = np.asarray(ts, float)
         start   = np.asarray(start, float).reshape(3) 
         goal    = np.asarray(goal, float).reshape(3)
-        return goal[None,:] + (start - goal)[None,:]*np.exp(-(alpha/self.tau)*ts)[:,None]
+        return goal[None,:] + (start - goal)[None,:] * np.exp(-(alpha / self.tau) * ts)[:,None]
+    
+    def polynomial_system(self, ts, start, goal, alpha=15.0):
+        """
+        @brief
+            A dynamical system with polynomial decay.
+            Dynamics:               x'   = -(alpha / tau) * (x - goal)^(1 - 1/alpha)
+            Analytical solution:    x(t) = goal + (start - goal) * (1 - t / tau)^alpha
 
-class RBF:
-    def __init__(self,n,inter_height=0.7,reg=1e-6,normalize=True):
-        self.n=int(n); self.h=float(inter_height); self.reg=float(reg); self.normalize=bool(normalize)
-        self.centers=None; self.widths=None; self.W=None
-    def _bases(self):
-        if self.n>1:
-            self.centers=np.linspace(0,1,self.n).reshape(-1,1)
-            delta=self.centers[1]-self.centers[0]
-            sigma=float(delta)/np.sqrt(-8.0*np.log(self.h))
-            self.widths=np.full((self.n,1),sigma)
+        @param ts (np.ndarray)
+            Time stamps.
+        @param start (np.ndarray)
+            Initial position vector.
+        @param goal (np.ndarray)
+            Final position vector.
+        @param alpha (float)
+            Decay rate.
+
+        @return (np.ndarray)
+            Phase variable values at the given time stamps.
+        """
+        ts    = np.asarray(ts, float)
+        s     = np.clip(ts / self.tau, 0.0, 1.0)          
+        start = np.asarray(start, float).reshape(3)
+        goal  = np.asarray(goal,  float).reshape(3)
+        return goal[None,:] + (start - goal)[None,:] * (1.0 - s)[:,None]**alpha
+
+class FunctionApproximatorRBFN:
+    """
+    Radial Basis Function (RBF) approximator with Gaussian kernels.
+    """
+    def __init__(self, n_bfs: int, intersection_height: float = 0.7, regularization: float = 1e-6, normalize: bool = True):
+        """
+        @param n_bfs (int)
+            Number of RBFs.
+        @param intersection_height (float)
+            Height at which two neighbouring basis functions intersect.
+        @param regularization (float)
+            Regularization term for the least squares solution.
+        @param normalize (bool)
+            Whether to normalize the RBF outputs to sum to 1.
+        """
+        self.M          = int(n_bfs)
+        self.h          = float(intersection_height)
+        self.reg        = float(regularization)
+        self.normalize  = bool(normalize)
+
+        self.centers = None    # shape (M, 1)
+        self.widths  = None    # shape (M, 1)
+        self.W       = None    # shape (M, D)
+
+    def _compute_centers_widths(self):
+        """
+        @brief
+            Evenly space centers in [0, 1], calculate widths from intersection height h.
+        """
+        if self.M > 1:
+            self.centers    = np.linspace(0, 1, self.M).reshape(-1,1)
+            delta           = self.centers[1] - self.centers[0]
+            # Standard deviation (sigma) for Gaussian basis functions such that two neighbouring functions intersect at height h
+            sigma           = float(delta) / np.sqrt(-8.0 * np.log(self.h))
+            self.widths     = np.full((self.M, 1), sigma)
         else:
-            self.centers=np.array([[0.5]]); self.widths=np.array([[1.0]])
-    def _phi(self,x):
-        X=np.asarray(x,float).reshape(-1,1); C=self.centers.T; W=self.widths.T
-        Phi=np.exp(-0.5*((X-C)/W)**2)
+            self.centers = np.array([[0.5]])
+            self.widths  = np.array([[1.0]])
+
+    def _activations(self, x):
+        """
+        @brief
+            Compute the RBF activations for input x.
+            
+        @param x (np.ndarray)
+            Input values, shape (T,).
+        """
+        X   = np.asarray(x, float).reshape(-1,1)        # shape (T, 1)
+        C   = self.centers.T                            # shape (1, M)
+        W   = self.widths.T                             # shape (1, M)
+        phi = np.exp(-0.5 * ((X - C) / W)**2)           # shape (T, M)
         if self.normalize:
-            s=np.sum(Phi,axis=1,keepdims=True)+1e-12; Phi=Phi/s
-        return Phi
-    def train(self,x,fx):
-        self._bases()
-        x=np.asarray(x,float).reshape(-1); FX=np.asarray(fx,float)
-        if FX.ndim==1: FX=FX[:,None]
-        PSI=self._phi(x)
-        A=PSI.T@PSI+self.reg*np.eye(self.n); B=PSI.T@FX
-        try: self.W=np.linalg.solve(A,B)
+            s   = np.sum(phi, axis=1, keepdims=True) + 1e-12
+            phi = phi/s
+        return phi
+    
+    def train(self, x, fx):
+        """
+        @brief
+            Train the RBF weights W such that psi(x) @ W = fx, using regularized least squares.
+
+        @param x (np.ndarray)
+            Input values, shape (T,).
+        @param fx (np.ndarray)
+            Target output values, shape (T, D).
+        """
+        x   = np.asarray(x, float).reshape(-1)
+        FX  = np.asarray(fx, float)
+
+        if FX.ndim == 1:
+            FX = FX[:,None]
+
+        # 1) set up Gaussians 
+        self._compute_centers_widths()
+
+        # 2) build activation matrix
+        PSI = self._activations(x)
+
+        # 3) solve for W using regularized least squares
+        A   = PSI.T @ PSI + self.reg * np.eye(self.M)
+        B   = PSI.T @ FX
+        try: 
+            self.W = np.linalg.solve(A, B)
         except np.linalg.LinAlgError:
-            self.W,_res,_r,_s=np.linalg.lstsq(A,B,rcond=None)
+            self.W, _, _, _ = np.linalg.lstsq(A, B, rcond=None)
+
     def predict(self,x):
-        if self.W is None: raise RuntimeError("RBF not trained")
-        PSI=self._phi(np.asarray(x,float).reshape(-1))
-        return PSI@self.W
+        """
+        @brief
+            Predict output for input x using the trained RBF weights.
+
+        @param x (np.ndarray)
+            Input values, shape (T,).
+            
+        @return (np.ndarray)
+            Predicted output values, shape (T, D).
+        """
+        if self.W is None: 
+            raise RuntimeError("RBF not trained")
+        PSI = self._activations(np.asarray(x, float).reshape(-1))
+        return PSI @ self.W
+
 
 class DMPGainSlackFull:
     """
@@ -282,9 +381,9 @@ class DMPGainSlackFull:
         self.tau=float(tau); self.dt=float(dt); self.ts=np.arange(0.0,self.tau+1e-12,self.dt); self.T=self.ts.size
         self.alpha_kb=float(alpha_kb); self.K0=float(K0); self.D0=float(D0)
         self.slack_mag=float(slack_mag); self.slack_rate=float(slack_rate_limit)
-        self.canon=Canonical(self.tau)
+        self.canon=DynamicalSystems(self.tau)
         # trajectory forcing (RBFs)
-        self.rbf_traj=[RBF(n_bfs_traj,normalize=normalize_rbfs_traj) for _ in range(3)]
+        self.rbf_traj=[FunctionApproximatorRBFN(n_bfs_traj,normalize=normalize_rbfs_traj) for _ in range(3)]
         y,yd,ydd,ts=MinimumJerk(self.start,self.goal,self.tau,self.dt).generate()
         x=self.canon.phase(ts); g=self.canon.gate(ts); yg=self.canon.goal(ts,self.start,self.goal,15.0)
         d, m = 20.0, 1.0; k=(d**2)/4.0
@@ -292,8 +391,8 @@ class DMPGainSlackFull:
         f_target=f_target/(g[:,None]+1e-12)
         for i in range(3): self.rbf_traj[i].train(x,f_target[:,i])
         # slacks
-        self.rbf_Sd=RBF(n_bfs_slack,normalize=normalize_rbfs_slack)
-        self.rbf_Sk=RBF(n_bfs_slack,normalize=normalize_rbfs_slack)
+        self.rbf_Sd=FunctionApproximatorRBFN(n_bfs_slack,normalize=normalize_rbfs_slack)
+        self.rbf_Sk=FunctionApproximatorRBFN(n_bfs_slack,normalize=normalize_rbfs_slack)
         self.Hd=None
         self._init_slacks(np.eye(3))
 
@@ -389,6 +488,152 @@ class CostWeights:
     W_via: float = 100.0
     W_reg: float = 1e-4
     W_gain: float | None = None  # defaults 1/N
+
+
+
+
+# ===================== MuJoCo env (OSID) =====================
+class RobotEnv:
+    def __init__(self, xml_path, eef_body="hand", use_viewer=False,
+                 nullspace=True, kp_null=25.0, kd_null=5.0,
+                 respect_limits=True):
+        if not os.path.exists(xml_path): raise FileNotFoundError(xml_path)
+        self.model=mujoco.MjModel.from_xml_path(xml_path); self.data=mujoco.MjData(self.model)
+        self.site_id=mujoco.mj_name2id(self.model,mujoco.mjtObj.mjOBJ_SITE,"ee_site")
+        self._use_site=self.site_id>=0
+        if not self._use_site:
+            self.eef_id=mujoco.mj_name2id(self.model,mujoco.mjtObj.mjOBJ_BODY,eef_body)
+            if self.eef_id<0: raise RuntimeError("EEF body not found")
+        self.key_home=mujoco.mj_name2id(self.model,mujoco.mjtObj.mjOBJ_KEY,"home")
+        if self.key_home==-1: raise RuntimeError("Keyframe 'home' not found")
+
+        self.use_nullspace=bool(nullspace)
+        self.kp_null=float(kp_null); self.kd_null=float(kd_null)
+        self.respect_limits=bool(respect_limits)
+
+        self.J_pos=np.zeros((3,self.model.nv)); self.J_pos_prev=np.zeros_like(self.J_pos)
+        self.sim_dt=self.model.opt.timestep; self.nu=self.model.nu
+        if hasattr(self.model,"actuator_forcerange"):
+            self.force_min=self.model.actuator_forcerange[:,0].astype(float)
+            self.force_max=self.model.actuator_forcerange[:,1].astype(float)
+        else:
+            self.force_min=np.full(self.nu,-np.inf); self.force_max=np.full(self.nu,np.inf)
+        # actuator→dof
+        self.act_dof=[-1]*self.nu; TRN_JOINT=int(mujoco.mjtTrn.mjTRN_JOINT)
+        for i in range(self.nu):
+            if int(self.model.actuator_trntype[i])==TRN_JOINT:
+                j_id=int(self.model.actuator_trnid[i,0]); dof=int(self.model.jnt_dofadr[j_id]); self.act_dof[i]=dof
+
+        self.viewer=None
+        if use_viewer:
+            try:
+                import mujoco.viewer as mjv
+                self.viewer=mjv.launch_passive(self.model,self.data)
+            except Exception as e:
+                print("[Viewer] Headless:",e)
+        mujoco.mj_resetDataKeyframe(self.model,self.data,self.key_home); mujoco.mj_forward(self.model,self.data)
+        self.home_qpos=self.data.qpos.copy()
+        self._sat_counts=np.zeros(self.nu,int); self._step_count=0
+
+    def _maybe_sync(self):
+        if self.viewer is None: return
+        try:
+            if hasattr(self.viewer,"is_running") and not self.viewer.is_running():
+                self.viewer.close(); self.viewer=None
+            else:
+                self.viewer.sync()
+        except Exception:
+            pass
+    def _jac_now(self):
+        if self._use_site: mujoco.mj_jacSite(self.model,self.data,self.J_pos,None,self.site_id)
+        else:              mujoco.mj_jacBody(self.model,self.data,self.J_pos,None,self.eef_id)
+    def _ee_pos_now(self):
+        return np.array(self.data.site_xpos[self.site_id],float) if self._use_site else np.array(self.data.xpos[self.eef_id],float)
+
+    def reset(self):
+        mujoco.mj_resetDataKeyframe(self.model,self.data,self.key_home); mujoco.mj_forward(self.model,self.data); self._maybe_sync()
+        self.J_pos_prev[:] = 0.0
+        self._sat_counts[:]=0; self._step_count=0
+
+    def ee_pos(self):
+        mujoco.mj_forward(self.model,self.data); self._maybe_sync(); return self._ee_pos_now()
+
+    def mass_matrix(self):
+        nv=self.model.nv; M=np.zeros((nv,nv),float); mujoco.mj_fullM(self.model,M,self.data.qM); return M
+
+    def bias_forces(self):
+        return self.data.qfrc_bias.copy()
+
+    def cartesian_inertia(self, eps=1e-9):
+        mujoco.mj_forward(self.model,self.data); self._jac_now()
+        nv=self.model.nv; M=np.zeros((nv,nv),float); mujoco.mj_fullM(self.model,M,self.data.qM)
+        X=np.linalg.solve(M,self.J_pos.T)
+        A=self.J_pos@X; A=sym(A)+eps*np.eye(3)
+        return sym(np.linalg.inv(A))  # Λ(q)
+
+    def step_impedance_osid(self, des_pos, des_vel, des_acc, K, D, H_d, dt,
+                            nullspace=True):
+        des_pos=np.asarray(des_pos,float).reshape(3)
+        des_vel=np.asarray(des_vel,float).reshape(3)
+        des_acc=np.asarray(des_acc,float).reshape(3)
+        K=np.asarray(K,float).reshape(3,3); D=np.asarray(D,float).reshape(3,3)
+        H_d=np.asarray(H_d,float).reshape(3,3)
+        nsub=max(1,int(round(dt/self.sim_dt)))
+        for _ in range(nsub):
+            mujoco.mj_forward(self.model,self.data); self._jac_now()
+            q=self.data.qpos[:self.model.nv]; qd=self.data.qvel[:self.model.nv]
+            x=self._ee_pos_now(); v=self.J_pos@qd
+            if self._step_count>0:
+                Jdot = (self.J_pos - self.J_pos_prev)/self.sim_dt
+                Jdot_qdot = Jdot @ qd
+            else:
+                Jdot_qdot = np.zeros(3)
+            self.J_pos_prev[:]=self.J_pos
+
+            # virtual impedance with constant H_d
+            e = des_pos - x
+            ed= des_vel - v
+            xdd_cmd = des_acc - np.linalg.solve(H_d, D@(-ed) + K@(-e))
+
+            # Joint-space solve
+            M = self.mass_matrix(); b = self.bias_forces()
+            X = np.linalg.solve(M, self.J_pos.T)        # M^{-1} J^T
+            JJ = self.J_pos @ X
+            try: Lambda = np.linalg.inv(sym(JJ))
+            except np.linalg.LinAlgError: Lambda = np.linalg.pinv(sym(JJ))
+            Jsharp = X @ Lambda                          # M^{-1} J^T Λ
+            qdd_task = Jsharp @ (xdd_cmd - Jdot_qdot)
+
+            if nullspace and self.use_nullspace:
+                q_err = self.home_qpos[:self.model.nv] - q
+                qdd_null = self.kp_null*q_err - self.kd_null*qd
+                N = np.eye(self.model.nv) - Jsharp @ self.J_pos
+                qdd = qdd_task + N @ qdd_null
+            else:
+                qdd = qdd_task
+
+            tau = M @ qdd + b
+
+            # Actuator mapping
+            ctrl=np.zeros(self.nu)
+            for i in range(self.nu):
+                dof=int(self.act_dof[i])
+                if dof>=0:
+                    t=float(tau[dof])
+                    if self.respect_limits:
+                        t=np.clip(t,self.force_min[i],self.force_max[i])
+                        if (t<=self.force_min[i]+1e-9) or (t>=self.force_max[i]-1e-9): self._sat_counts[i]+=1
+                    ctrl[i]=t
+            self.data.ctrl[:]=ctrl
+            mujoco.mj_step(self.model,self.data); self._step_count+=1; self._maybe_sync()
+        mujoco.mj_forward(self.model,self.data); self._jac_now()
+        return self._ee_pos_now(), self.J_pos@self.data.qvel
+
+    def print_saturation_report(self):
+        if self._step_count==0: return
+        frac=self._sat_counts/float(self._step_count)
+        print("[Torque saturation] "+" , ".join([f"act{i}:{100*f:.1f}%" for i,f in enumerate(frac)]))
+
 
 
 def run_training(model_xml, goal, via_point, tau=1.0, dt=0.002,
