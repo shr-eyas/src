@@ -8,6 +8,8 @@
 #include <Eigen/LU>
 #include <Eigen/StdVector>
 
+#include <fr3_controllers/pseudo_inversion.h>
+
 namespace fr3_controllers {
 
 bool Scheduler::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& node_handle) {
@@ -94,13 +96,15 @@ bool Scheduler::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& nod
 }
 
 void Scheduler::starting(const ros::Time& /*time*/) {
-    const franka::RobotState robot_state = state_handle_->getRobotState();
-    q_d = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.q.data());
+    const franka::RobotState initial_state = state_handle_->getRobotState();
+    q_d = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(initial_state.q.data());
     dq_d = Eigen::Matrix<double, 7, 1>::Zero();
     previous_jacobian_.setZero();
     previous_tau_.setZero();
     running_ = false;
     time_index_ = 0;
+
+    q_d_nullspace_ = q_d;
 }
 
 void Scheduler::update(const ros::Time& now, const ros::Duration& period) {
@@ -190,16 +194,16 @@ void Scheduler::update(const ros::Time& now, const ros::Duration& period) {
             Eigen::Matrix<double, 7, 1> qdd_task = Jsharp * (xdd_cmd - jdot_qdot);
             Eigen::Matrix<double, 7, 1> qdd = qdd_task; 
 
-            if (schedule->use_nullspace) {
-                const Eigen::Matrix<double, 7, 7> I = Eigen::Matrix<double, 7, 7>::Identity();
-                const Eigen::Matrix<double, 7, 7> N = I - Jsharp * J;
-                const Eigen::Matrix<double, 7, 1> q_err = schedule->q_home - q;
-                const Eigen::Matrix<double, 7, 1> qdd_ns = kp_ns_ * q_err - kd_ns_ * dq;
-                qdd = qdd_task + N * qdd_ns;
-            }
+            Eigen::MatrixXd jacobian_transpose_pinv;
+            pseudoInverse(J_.transpose(), jacobian_transpose_pinv);
+            Eigen::VectorXd tau_nullspace(7);
+            tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) -
+                    J_.transpose() * jacobian_transpose_pinv) *
+                       (nullspace_stiffness_ * (q_d_nullspace_ - q) -
+                        (2.0 * sqrt(nullspace_stiffness_)) * dq);
 
             // full dynamics torque
-            tau_cmd = M * qdd + C;
+            tau_cmd = M * qdd + C + tau_nullspace;
             running_ = true;
 
             // torque-rate limit and command

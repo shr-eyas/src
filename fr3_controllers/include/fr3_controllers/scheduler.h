@@ -30,7 +30,7 @@ struct PreparedSchedule {
   std::vector<Eigen::Matrix3d, Eigen::aligned_allocator<Eigen::Matrix3d>> damping;    
   Eigen::Matrix3d inertia = Eigen::Matrix3d::Identity();
   double alpha{0.5};               
-  bool use_nullspace{false};
+  bool use_nullspace{true};
   Eigen::Matrix<double,7,1> q_home = Eigen::Matrix<double,7,1>::Zero();
 };
 
@@ -85,6 +85,22 @@ private:
   inline Eigen::Matrix<double,7,1> saturateTorqueRate(
       const Eigen::Matrix<double,7,1>& tau_des,
       const Eigen::Matrix<double,7,1>& tau_last) const;
+
+  // NEW
+  double filter_params_{0.005};
+  double nullspace_stiffness_{20.0};
+  double nullspace_stiffness_target_{20.0};
+  Eigen::Matrix<double, 6, 6> cartesian_stiffness_;
+  Eigen::Matrix<double, 6, 6> cartesian_stiffness_target_;
+  Eigen::Matrix<double, 6, 6> cartesian_damping_;
+  Eigen::Matrix<double, 6, 6> cartesian_damping_target_;
+  Eigen::Matrix<double, 7, 1> q_d_nullspace_;
+  Eigen::Vector3d position_d_;
+  Eigen::Quaterniond orientation_d_;
+  std::mutex position_and_orientation_d_target_mutex_;
+  Eigen::Vector3d position_d_target_;
+  Eigen::Quaterniond orientation_d_target_;
+  // END NEW
 
   inline bool spd_floor(Eigen::Matrix3d& M, double eps) const;                        // clamp to SPD with floor
   inline uint32_t timeIndex(const ros::Time& now, const PreparedSchedule& S) const;   // t→k
