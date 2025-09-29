@@ -1,0 +1,14 @@
+<library path="lib/libmulti_arm_controllers">
+  <class name="multi_arm_controllers/GravCompController"
+         type="multi_arm_controllers::GravCompController"
+         base_class_type="controller_interface::ControllerBase">
+    <description>Gravity Compensation.</description>
+  </class>
+
+  <class name="multi_arm_controllers/MirrorImpedanceController"
+         type="multi_arm_controllers::MirrorImpedanceController"
+         base_class_type="controller_interface::ControllerBase">
+    <description>Mirror joint states via joint impedance.</description>
+  </class>
+
+</library>

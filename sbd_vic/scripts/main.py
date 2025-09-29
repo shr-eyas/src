@@ -135,7 +135,7 @@ def main():
 
     # params
     server_name   = rospy.get_param("~server", "/scheduler_controller/execute_schedule")
-    csv_path      = rospy.get_param("~csv_path", "/home/sophia/fr3_ws/src/sbd_vic/data/final_rollout_experiment.csv")
+    csv_path      = rospy.get_param("~csv_path", "/home/sophia/fr3_ws/src/sbd_vic/data/formatted_output.csv")
 
     # phase 1: go-to-first
     dt_forward    = float(rospy.get_param("~dt_forward", 0.001))
