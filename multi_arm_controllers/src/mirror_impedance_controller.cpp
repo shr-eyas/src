@@ -94,6 +94,9 @@ bool MirrorImpedanceController::init(hardware_interface::RobotHW* robot_hw, ros:
     }
   }
 
+  node_handle.param<std::string>("source_topic", source_topic_, source_topic_);
+  node_handle.param<std::string>("source_arm_id", source_arm_id_, source_arm_id_);
+
   sub_ = node_handle.subscribe<sensor_msgs::JointState>(
       source_topic_, 1, &MirrorImpedanceController::jsCb, this,
       ros::TransportHints().tcpNoDelay());
@@ -114,7 +117,7 @@ void MirrorImpedanceController::jsCb(const sensor_msgs::JointStateConstPtr& msg)
   if (!mapped) {
     std::array<int,7> idx{};
     for (int j=0;j<7;j++) {
-      const std::string expected = "fr3_joint" + std::to_string(j+1); 
+      const std::string expected = source_arm_id_ + "_joint" + std::to_string(j+1); 
       auto it = std::find(msg->name.begin(), msg->name.end(), expected);
       if (it == msg->name.end()) return;
       idx[j] = static_cast<int>(std::distance(msg->name.begin(), it));

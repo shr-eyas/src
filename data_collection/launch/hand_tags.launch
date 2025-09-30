@@ -1,0 +1,18 @@
+<launch>
+  <node pkg="apriltag_ros" type="apriltag_ros_continuous_node" name="hand_tags" output="screen">
+    <!-- Remap to your hand_cam topics -->
+    <remap from="image_rect"  to="/hand_cam/color/image_raw"/>
+    <remap from="camera_info" to="/hand_cam/color/camera_info"/>
+
+    <!-- Minimal config -->
+    <param name="tag_family" value="tag36h11"/>
+    <param name="publish_tf" value="true"/>
+    <param name="camera_frame" value="hand_cam_color_optical_frame"/>
+    <param name="publish_tag_detections_image" value="true"/>
+
+    <!-- Tag size inline (meters) -->
+    <rosparam param="standalone_tags">
+      - {id: 0, size: 0.10}
+    </rosparam>
+  </node>
+</launch>

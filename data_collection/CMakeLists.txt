@@ -24,6 +24,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package()
 
 catkin_install_python(PROGRAMS
-    scripts/button_gripper_map.py
+    scripts/map_franka_hand.py
+    scripts/record_data.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

@@ -39,5 +39,6 @@ mirror_impedance:
       - 20.0
       - 10.0
   coriolis_factor: 1.0
-  source_topic: /fr3_right/joint_states
+  source_topic: /fr3_left/joint_states
+  source_arm_id: fr3_left       
   stale_timeout: 0.05

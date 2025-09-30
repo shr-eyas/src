@@ -1,0 +1,29 @@
+<launch>
+  <!-- HAND -->
+  <node pkg="apriltag_ros" type="apriltag_ros_continuous_node" name="hand_tags" output="screen">
+    <!-- node subscribes to /image_rect and /camera_info (absolute) -->
+    <remap from="/image_rect"   to="/hand_cam/color/image_raw"/>
+    <remap from="/camera_info"  to="/hand_cam/color/camera_info"/>
+    <!-- remap outputs to namespaced topics -->
+    <remap from="/tag_detections"        to="/hand_tags/tag_detections"/>
+    <remap from="/tag_detections_image"  to="/hand_tags/tag_detections_image"/>
+
+    <param name="tag_family" value="tag36h11"/>
+    <param name="publish_tf" value="true"/>
+    <param name="camera_frame" value="hand_cam_color_optical_frame"/>
+    <rosparam param="standalone_tags">[ {id: 0, size: 0.10} ]</rosparam>
+  </node>
+
+  <!-- GROUND -->
+  <node pkg="apriltag_ros" type="apriltag_ros_continuous_node" name="ground_tags" output="screen">
+    <remap from="/image_rect"   to="/ground_cam/color/image_raw"/>
+    <remap from="/camera_info"  to="/ground_cam/color/camera_info"/>
+    <remap from="/tag_detections"        to="/ground_tags/tag_detections"/>
+    <remap from="/tag_detections_image"  to="/ground_tags/tag_detections_image"/>
+
+    <param name="tag_family" value="tag36h11"/>
+    <param name="publish_tf" value="true"/>
+    <param name="camera_frame" value="ground_cam_color_optical_frame"/>
+    <rosparam param="standalone_tags">[ {id: 0, size: 0.10} ]</rosparam>
+  </node>
+</launch>

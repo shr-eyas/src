@@ -50,6 +50,7 @@ class MirrorImpedanceController : public controller_interface::MultiInterfaceCon
   std::array<double,7> dq_filtered_{{0,0,0,0,0,0,0}};
   std::array<int,7> name_to_idx_{{0,1,2,3,4,5,6}};
   ros::Time last_msg_stamp_;
+  std::string source_arm_id_{"fr3"};
 
   // RT input buffers
   realtime_tools::RealtimeBuffer<std::array<double,7>> qd_buf_;

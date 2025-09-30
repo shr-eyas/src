@@ -23,4 +23,12 @@
     <arg name="initial_reset" value="false"/>
     <arg name="wait_for_device_timeout" value="10.0"/>
   </include>
+
+  <node pkg="tf2_ros" type="static_transform_publisher" name="fr3_handeye_tf" 
+    args="0.06490541 0.02091871 -0.02080638 
+    0.000007737 -0.707028769 0.004591718 0.707169878 fr3_right_EE hand_cam_link"/>
+
+  <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_ground_cam_link"
+    args="1.3910959851077305 -0.05411235055351224 0.964396010675839 
+    -0.30709465667153735 0.005354335025953031 0.9516464722054598 0.005761499728638259 fr3_right_link0 ground_cam_link"/>
 </launch>

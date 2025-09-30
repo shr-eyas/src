@@ -1,0 +1,5 @@
+<launch>
+  <node pkg="tf2_ros" type="static_transform_publisher" name="fr3_handeye_tf" args="
+    0.06490541 0.02091871 -0.02080638 
+    0.000007737 -0.707028769 0.004591718 0.707169878 fr3_EE hand_cam_link"/>
+</launch>

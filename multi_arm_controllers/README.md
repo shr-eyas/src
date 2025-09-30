@@ -1,0 +1,1 @@
+To ensure the `tfs` are namespaced and do not conflict, make sure the `arm_id` are different for each robot.
