@@ -67,4 +67,10 @@
     <description>Time-scheduled Cartesian impedance executor.</description>
   </class>
 
+  <class name="fr3_controllers/MoveToStartController"
+        type="fr3_controllers::MoveToStartController"
+        base_class_type="controller_interface::ControllerBase">
+    <description></description>
+  </class>
+
 </library>

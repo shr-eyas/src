@@ -93,6 +93,7 @@ add_library(fr3_controllers
   src/joint_impedance_controller.cpp
   src/dob.cpp
   src/scheduler.cpp
+  src/move_to_start_controller.cpp
 )
 
 catkin_install_python(PROGRAMS
